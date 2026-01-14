@@ -2,6 +2,10 @@
 
 const test = require('tape')
 const parse = require('./')
+const timezoneMock = require('timezone-mock')
+
+const springForward = '2025-03-09 02:30:00' // Never occurred in the U.S.
+const fallBack = '2025-11-02 01:30:00' // Occurred twice in the U.S.
 
 test('date parser', function (t) {
   t.equal(parse('garbage'), null)
@@ -36,10 +40,129 @@ test('date parser', function (t) {
     1800
   )
 
+  const summer = '2025-06-30 11:57:23'
+  const winter = '2026-01-13 23:53:08'
+
+  withLocalTimeZone('US/Eastern', () => {
+    t.equal(
+      parse(winter, 'UTC').getTime(),
+      new Date('2026-01-13T23:53:08Z').getTime(),
+      'client behind server'
+    )
+    t.equal(
+      parse(summer, 'UTC').getTime(),
+      new Date('2025-06-30T11:57:23Z').getTime(),
+      'client behind server (DST)'
+    )
+    t.equal(
+      parse(summer, 'America/New_York').getTime(),
+      new Date('2026-01-13T23:53:08-05:00').getTime(),
+      'client same time as server'
+    )
+    t.equal(
+      parse(summer, 123).getTime(),
+      new Date('2026-01-13T23:53:08+02:03').getTime(),
+      'Arbitrary offset in minutes'
+    )
+    t.equal(
+      parse(summer, 1440).getTime(),
+      new Date('2026-01-12T23:53:08Z').getTime(),
+      'Extreme offset in minutes (UTC +24h)'
+    )
+    t.equal(
+      parse(summer, 'Pacific/Kiritimati').getTime(),
+      new Date('2025-06-30T11:57:23+14:00').getTime(),
+      'Server in Kiritimati'
+    )
+    // Etc zones have inverted signs for POSIX compliance, so this is UTC-12.
+    t.equal(
+      parse(summer, 'Etc/GMT+12').getTime(),
+      new Date('2025-06-30T11:57:23-12:00').getTime(),
+      'Server on Baker Island'
+    )
+  })
+
+  withLocalTimeZone('Etc/GMT-14', () => {
+    t.equal(
+      parse(summer, 'Etc/GMT+12').getTime(),
+      new Date('2025-06-30T11:57:23-12:00').getTime(),
+      'Server extremely behind'
+    )
+  })
+
+  withLocalTimeZone('Etc/GMT+12', () => {
+    t.equal(
+      parse(summer, 'Etc/GMT+12').getTime(),
+      new Date('2025-06-30T11:57:23-12:00').getTime(),
+      'Server extremely ahead'
+    )
+  })
+
+  withLocalTimeZone('Australia/Adelaide', () => {
+    t.equal(
+      parse(summer, 'Asia/Kathmandu').getTime(),
+      new Date('2025-06-30T11:57:23+05:45').getTime(),
+      'Funky offsets'
+    )
+  })
+
+  const postgresTzOptions = { serverTz: 'America/New_York', tzMode: 'postgres' }
+
+  t.equal(
+    parse(springForward, postgresTzOptions).getTime(),
+    new Date('2025-03-09T02:30:00-05:00:00').getTime(),
+    'Postgres timezone mode assumes illegal times are given in the pre-change offset'
+  )
+
+  t.equal(
+    parse(fallBack, postgresTzOptions).getTime(),
+    new Date('2025-11-02T01:30:00-05:00').getTime(),
+    'Postgres timezone mode assumes ambiguous times are given in the post-change offset'
+  )
+
+  const javascriptTzOptions = { serverTz: 'America/New_York', tzMode: 'javascript' }
+
+  t.equal(
+    parse(springForward, javascriptTzOptions).getTime(),
+    new Date('2025-03-09T02:30:00-05:00:00').getTime(),
+    'Javascript timezone mode assumes illegal times are given in the pre-change offset'
+  )
+
+  t.equal(
+    parse(fallBack, javascriptTzOptions).getTime(),
+    new Date('2025-11-02T01:30:00-04:00').getTime(),
+    'Javascript timezone mode assumes ambiguous times are given in the pre-change offset'
+  )
+
+  const strictTzOptions = { serverTimeZone: 'America/New_York', tzMode: 'strict' }
+
+  t.error(
+    () => parse(springForward, strictTzOptions),
+    'Strict mode rejects illegal timestamp'
+  )
+
+  t.error(
+    () => parse(fallBack, strictTzOptions),
+    'Strict mode rejects ambiguous timestamp'
+  )
+
+  t.equal(
+    parse(springForward, 'America/New_York').getTime(),
+    new Date('2025-03-09T02:30:00-05:00:00').getTime(),
+    'tz mode defaults to postgres (spring forward)'
+  )
+
+  t.equal(
+    parse(fallBack, 'America/New_York').getTime(),
+    new Date('2025-11-02T01:30:00-05:00').getTime(),
+    'tz mode defaults to postgres (fall back)'
+  )
+
   function ms (string) {
     const base = '2010-01-01 01:01:01'
     return parse(base + string).getMilliseconds()
   }
+
   t.equal(ms('.1'), 100)
   t.equal(ms('.01'), 10)
   t.equal(ms('.74'), 740)
@@ -107,3 +230,12 @@ test('date parser', function (t) {
 
   t.end()
 })
+
+function withLocalTimeZone (tz, f) {
+  timezoneMock.register(tz)
+  try {
+    f()
+  } finally {
+    timezoneMock.unregister()
+  }
+}

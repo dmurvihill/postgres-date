@@ -21,11 +21,11 @@
     "date",
     "parser"
   ],
-  "dependencies": {},
   "devDependencies": {
     "standard": "^17.0.0",
     "tape": "^5.0.0",
     "tsd": "< 0.22.0"
+    "timezone-mock": "^1.3.6",
   },
   "files": [
     "index.js",
